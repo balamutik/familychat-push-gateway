@@ -1,0 +1,26 @@
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: [serve, --state, /var/lib/familychat-push/state.json, --listen, ':9443', --tls-cert, /run/gateway-secrets/tls.crt, --tls-key, /run/gateway-secrets/tls.key]
+    environment:
+      APNS_KEY_FILE: ${APNS_KEY_FILE:-}
+      APNS_KEY_ID: ${APNS_KEY_ID:-}
+      APNS_TEAM_ID: ${APNS_TEAM_ID:-}
+      APNS_TOPIC: ${APNS_TOPIC:-}
+      APNS_SANDBOX: ${APNS_SANDBOX:-false}
+      FCM_CREDENTIALS_FILE: ${FCM_CREDENTIALS_FILE:-}
+      FCM_PROJECT_ID: ${FCM_PROJECT_ID:-}
+      FCM_APPLICATION_ID: ${FCM_APPLICATION_ID:-}
+    volumes:
+      - ./data:/var/lib/familychat-push
+      - ./secrets:/run/gateway-secrets:ro
+    ports:
+      - '${PUSH_BIND_HOST:-0.0.0.0}:${PUSH_HTTPS_PORT:-9443}:9443'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    mem_limit: 256m
+    restart: unless-stopped

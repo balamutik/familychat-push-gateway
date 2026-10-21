@@ -1,0 +1,56 @@
+name: Build push gateway
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Test and validate
+        run: |
+          test -z "$(gofmt -l cmd internal)"
+          go test -race ./...
+          go vet ./...
+          bash -n scripts/build-artifacts.sh
+          docker compose --env-file .env.example config --quiet
+      - name: Build Linux binaries and deployment bundle
+        run: bash scripts/build-artifacts.sh
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build multi-platform Docker image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          tags: familychat-push-gateway:${{ github.sha }}
+          outputs: type=oci,dest=dist/familychat-push-gateway.oci.tar
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Calculate checksums
+        working-directory: dist
+        run: sha256sum *.tar.gz *.oci.tar > SHA256SUMS
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: push-gateway-build-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

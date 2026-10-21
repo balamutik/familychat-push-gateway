@@ -1,0 +1,14 @@
+.git
+.github
+.env
+data
+secrets
+export
+dist
+*.token
+*.p8
+*.pem
+*.key
+*.crt
+*.log
+.DS_Store
