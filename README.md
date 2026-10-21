@@ -7,10 +7,14 @@
 Нужен Ubuntu/Debian VPS с публичным IPv4 либо доменом, указывающим на этот VPS. Шлюз принимает HTTPS на **9443**. Для проверки адреса Let's Encrypt по HTTP-01 откройте входящий **TCP 80**; номер порта шлюза не меняет порт ACME-проверки. Установщик не останавливает другие сервисы и не меняет их nginx/firewall.
 
 ```bash
-git clone https://github.com/balamutik/familychat-push-gateway.git
-cd familychat-push-gateway
-sudo bash install.sh --domain push.example.com --email admin@example.com
+setup_dir=$(mktemp -d)
+curl -fL --retry 3 \
+  https://raw.githubusercontent.com/balamutik/familychat-push-gateway/main/install.sh \
+  -o "$setup_dir/install.sh"
+sudo bash "$setup_dir/install.sh" --domain push.example.com --email admin@example.com
 ```
+
+Клонировать репозиторий не нужно: отдельный `install.sh` сам скачивает пакет проверенной версии по HTTPS, сверяет закреплённый SHA-256 и запускает мастер. Временный пакет удаляется после завершения. Если запускаете скрипт из полного checkout или deployment-архива, используются соседние исходники. Для примеров ниже сначала перейдите в каталог скачанного скрипта: `cd "$setup_dir"`.
 
 Без параметров запускается мастер. Он запрашивает адрес, email, Certbot или acme.sh, способ проверки и платформы iOS/Android. Ключи Apple/Google нужно получить в соответствующих консолях заранее; установщик не может их сгенерировать. Подготовьте файлы с правами 0600 или 0400. При отсутствии зависимостей установщик предложит установить Docker/Compose, OpenSSL и ACME-клиент; acme.sh загружается по закреплённому коммиту с проверкой SHA-256. Если терминала нет, заранее установите зависимости и передайте все параметры.
 
