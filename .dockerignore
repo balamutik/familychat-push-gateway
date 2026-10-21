@@ -12,3 +12,13 @@ dist
 *.crt
 *.log
 .DS_Store
+**/__pycache__
+**/*.pyc
+acme
+app
+pending.json
+deploy.json
+dns.env
+dns-credentials.ini
+certbot-dns-args.json
+.manage.lock

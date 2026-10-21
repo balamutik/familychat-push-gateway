@@ -26,7 +26,8 @@ jobs:
           test -z "$(gofmt -l cmd internal)"
           go test -race ./...
           go vet ./...
-          bash -n scripts/build-artifacts.sh
+          python3 -m unittest discover -s scripts/tests -v
+          bash -n install.sh scripts/*.sh
           docker compose --env-file .env.example config --quiet
       - name: Build Linux binaries and deployment bundle
         run: bash scripts/build-artifacts.sh

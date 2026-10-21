@@ -2,7 +2,62 @@
 
 Отдельный HTTPS-сервис для APNs (сообщения и PushKit/CallKit) и FCM (сообщения, вызовы и состояние вызова). Серверы чатов не получают приватные ключи Apple/Google. Изменение существующих приложений iOS/Android не требуется. Настройки APNs и Firebase должны соответствовать официальной или собственной сборке клиента; один процесс обслуживает один набор приложений и одну APNs-среду. Для development и production используйте отдельные экземпляры.
 
-## Развёртывание шлюза
+## Установка с автоматическим сертификатом
+
+Нужен Ubuntu/Debian VPS с публичным IPv4 либо доменом, указывающим на этот VPS. Шлюз принимает HTTPS на **9443**. Для проверки адреса Let's Encrypt по HTTP-01 откройте входящий **TCP 80**; номер порта шлюза не меняет порт ACME-проверки. Установщик не останавливает другие сервисы и не меняет их nginx/firewall.
+
+```bash
+git clone https://github.com/balamutik/familychat-push-gateway.git
+cd familychat-push-gateway
+sudo bash install.sh --domain push.example.com --email admin@example.com
+```
+
+Без параметров запускается мастер. Он запрашивает адрес, email, Certbot или acme.sh, способ проверки и платформы iOS/Android. Ключи Apple/Google нужно получить в соответствующих консолях заранее; установщик не может их сгенерировать. Подготовьте файлы с правами 0600 или 0400. При отсутствии зависимостей установщик предложит установить Docker/Compose, OpenSSL и ACME-клиент; acme.sh загружается по закреплённому коммиту с проверкой SHA-256. Если терминала нет, заранее установите зависимости и передайте все параметры.
+
+Для публичного IP без домена:
+
+```bash
+sudo bash install.sh --ip PUBLIC_IPV4 --email admin@example.com \
+  --client acme.sh --challenge standalone
+```
+
+Замените `PUBLIC_IPV4` адресом своего VPS. Для IP автоматически выбирается профиль Let's Encrypt **shortlived**, срок сертификата — 160 часов; acme.sh проверяет необходимость перевыпуска через 3 дня. Ежедневное продление запускает systemd timer. Certbot для IP должен поддерживать `--ip-address` и `--required-profile` (5.4+); старые apt-версии отклоняются до установки сервиса. Приватные/LAN-адреса не подходят публичному CA. IP-режим установщика ограничен IPv4: текущий клиент сервера чатов не принимает IPv6 literal в URL шлюза; для IPv6 используйте доменное имя и настройте сеть Docker отдельно. [Профили Let's Encrypt](https://letsencrypt.org/docs/profiles/), [параметры Certbot](https://eff-certbot.readthedocs.io/en/stable/using.html), [shortlived в acme.sh](https://github.com/acmesh-official/acme.sh/wiki/Profile-selection).
+
+Пример с заранее указанными настройками iOS:
+
+```bash
+sudo bash install.sh --domain push.example.com --email admin@example.com \
+  --client acme.sh --challenge standalone \
+  --apns-key /root/AuthKey.p8 --apns-key-id KEY1234567 \
+  --apns-team-id TEAM123456 --apns-topic com.example.chat
+```
+
+Для development-сборки iOS добавьте `--apns-sandbox`; по умолчанию используется production. Для Android передайте `--fcm-credentials /root/firebase-service-account.json --fcm-project-id YOUR_PROJECT_ID --fcm-application-id com.example.chat`. Можно указать оба набора параметров. Приватные ключи копируются в закрытый каталог установки; значения ключей не передаются аргументами командной строки.
+
+Если порт 80 занят существующим веб-сервером, используйте `--challenge webroot --webroot /var/www/acme`. Каталог должен уже обслуживаться по `http://ADDRESS/.well-known/acme-challenge/`; маршрутизацию настраивает администратор существующего сервера. Для домена также поддерживается автоматический DNS-01: `--challenge dns --dns-provider dns_cf --dns-env /root/dns.env` с acme.sh. `dns.env` — приватный файл 0600 со строками `NAME=value`, без shell-команд. С Certbot передайте `--certbot-dns-args /root/dns-args.json`: приватный JSON-массив параметров установленного DNS-плагина, например `["--dns-cloudflare", "--dns-cloudflare-credentials", "/root/cloudflare.ini"]`; сам credentials-файл тоже должен иметь права 0600. DNS-01 не подтверждает IP-адрес.
+
+Установка по умолчанию находится в `/opt/familychat-push-gateway`, другой каталог задаётся `--install-dir`, порт — `--port` (по умолчанию 9443). Образ собирается из локальных исходников; готовый deployment-архив из Actions тоже содержит установщик и исходники. В каталоге установки отдельно сохраняются данные устройств, ключи провайдеров и ACME. Перед публикацией нового TLS bundle проверяются SAN, срок и совпадение приватного ключа. Обновление bundle атомарно; работающий шлюз читает его при новом TLS-соединении.
+
+Проверка и ручное продление:
+
+```bash
+systemctl list-timers 'familychat-push-renew-*'
+sudo /opt/familychat-push-gateway/app/scripts/renew.sh
+```
+
+Для нестандартного каталога добавляйте `--install-dir /your/path` также при продлении. Если systemd отсутствует, установщик покажет команду для ежедневного root cron; её нужно добавить самостоятельно. Порт 80 должен оставаться доступным и для последующих продлений HTTP-01.
+
+После успешной установки выдавайте токены из `/opt/familychat-push-gateway`, как описано ниже. Если установка прервалась, повторите `sudo bash install.sh --install-dir /opt/familychat-push-gateway` **без повторного ввода адреса и ключей**: сохранённые параметры из `pending.json` используются автоматически. Не удаляйте каталог `data` для повторной установки.
+
+Для обновления из нового checkout или распакованного deployment-архива:
+
+```bash
+sudo bash install.sh update --install-dir /opt/familychat-push-gateway
+```
+
+Данные и выданные токены сохраняются; исходные файлы ключей повторно не нужны. Обновление сохраняет адрес и настройки провайдеров, не заменяя их неявно. Сохраните резервную копию каталога установки перед обновлением.
+
+## Ручное развёртывание шлюза
 
 На отдельном Linux-хосте с Docker Compose:
 
@@ -36,7 +91,7 @@ sudo docker compose up -d gateway
 
 ## Подключение семейного сервера
 
-Выдайте отдельный токен каждой установке. Команда сохраняет его в файл 0600 и печатает только идентификатор для последующего отзыва:
+Перейдите в каталог установки шлюза (`/opt/familychat-push-gateway` для установщика). Выдайте отдельный токен каждой установке. Команда сохраняет его в файл 0600 и печатает только идентификатор для последующего отзыва:
 
 ```bash
 sudo docker compose run --rm -v "$PWD/export:/export" gateway add-client \
@@ -68,7 +123,7 @@ sudo familychat configure-push \
 
 ## Отзыв и ротация
 
-На шлюзе:
+На шлюзе, из каталога установки (`/opt/familychat-push-gateway` для установщика):
 
 ```bash
 sudo docker compose run --rm gateway revoke-client \
@@ -98,6 +153,7 @@ sudo docker compose run --rm gateway revoke-client \
 ```bash
 go test -race ./...
 go vet ./...
+python3 -m unittest discover -s scripts/tests -v
 docker compose build gateway
 ```
 

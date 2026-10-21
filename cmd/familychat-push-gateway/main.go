@@ -29,6 +29,19 @@ func main() {
 		log.Fatal(err)
 	}
 }
+
+func loadCertificate(certFile, keyFile string) (tls.Certificate, error) {
+	if certFile == keyFile {
+		// Managed installs atomically replace one PEM bundle during renewal.
+		// A single read prevents mixing a certificate with the previous key.
+		data, err := os.ReadFile(certFile)
+		if err != nil {
+			return tls.Certificate{}, err
+		}
+		return tls.X509KeyPair(data, data)
+	}
+	return tls.LoadX509KeyPair(certFile, keyFile)
+}
 func run(ctx context.Context, args []string, out io.Writer) error {
 	if len(args) == 0 {
 		return errors.New("usage: familychat-push-gateway serve|add-client|revoke-client [options]")
@@ -107,11 +120,11 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	if sender == nil {
 		return errors.New("configure at least one provider: APNs or FCM")
 	}
-	if _, err = tls.LoadX509KeyPair(*cert, *key); err != nil {
+	if _, err = loadCertificate(*cert, *key); err != nil {
 		return errors.New("cannot load gateway TLS certificate and key")
 	}
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
-		pair, err := tls.LoadX509KeyPair(*cert, *key)
+		pair, err := loadCertificate(*cert, *key)
 		return &pair, err
 	}}
 	server := &http.Server{Addr: *listen, Handler: pushgateway.NewHandler(store, sender, sender.APNs != nil, sender.FCM != nil), TLSConfig: tlsConfig, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8192}
