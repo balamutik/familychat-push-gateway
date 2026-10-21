@@ -13,6 +13,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -32,19 +35,40 @@ jobs:
       - name: Build Linux binaries and deployment bundle
         run: bash scripts/build-artifacts.sh
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && github.repository == 'balamutik/familychat-push-gateway'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build multi-platform Docker image
+        id: image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: false
-          tags: familychat-push-gateway:${{ github.sha }}
+          push: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && github.repository == 'balamutik/familychat-push-gateway' }}
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+            ghcr.io/${{ github.repository }}:latest
           outputs: type=oci,dest=dist/familychat-push-gateway.oci.tar
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Record published image
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && github.repository == 'balamutik/familychat-push-gateway'
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}@${{ steps.image.outputs.digest }}
+          REVISION: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('dist/published-image.json').write_text(json.dumps({'image':os.environ['IMAGE'], 'revision':os.environ['REVISION']}, indent=2)+'\n')
+          PY
       - name: Calculate checksums
         working-directory: dist
         run: sha256sum *.tar.gz *.oci.tar > SHA256SUMS
