@@ -78,6 +78,8 @@ jobs:
           trap 'rm -rf "$anonymous_config"' EXIT
           DOCKER_CONFIG="$anonymous_config" docker manifest inspect "$IMAGE" > /dev/null
           DOCKER_CONFIG="$anonymous_config" docker pull "$IMAGE"
+          pinned_image=$(python3 -c 'import json; print(json.load(open("image.json"))["image"])')
+          DOCKER_CONFIG="$anonymous_config" docker pull "$pinned_image"
       - name: Calculate checksums
         working-directory: dist
         run: |

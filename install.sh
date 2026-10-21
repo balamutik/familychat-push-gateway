@@ -34,8 +34,8 @@ import tarfile
 import urllib.parse
 import urllib.request
 
-REVISION = '78507d8af0654a3b5639e30d1d1be14b6cf5535b'
-SHA256 = '0b3f123c5cf893c2168feed00590206f94317e7bfadca190028f6d5ba9829b4a'
+REVISION = '446c99a88dd40ebe7ea29f1689729e2a9c25a099'
+SHA256 = 'c44d9a764c2f65ea1a0c5d9053a203331d3d2819e9c1b008cc06480bf0bd8072'
 
 class HTTPSRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
