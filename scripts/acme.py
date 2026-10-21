@@ -366,8 +366,12 @@ def publish_pair(config, certificate_path, key_path):
         is_ip = ip_address(config['domain']) is not None
         if ('IP Address:' if is_ip else 'DNS:') not in san:
             raise ValueError('Сертификат должен содержать subjectAltName')
-        subprocess.run(['openssl', 'x509', '-in', str(cert), '-noout',
-                        '-checkip' if is_ip else '-checkhost', config['domain']], check=True, capture_output=True)
+        # Older OpenSSL x509 -checkhost/-checkip can exit 0 on a mismatch.
+        # verify consistently fails. Trust the supplied leaf only for this local
+        # identity/time check; the HTTPS health probe uses the system CA store.
+        subprocess.run(['openssl', 'verify', '-trusted', str(cert), '-partial_chain', '-purpose', 'sslserver',
+                        '-verify_ip' if is_ip else '-verify_hostname', config['domain'], str(cert)],
+                       check=True, capture_output=True)
         subprocess.run(['openssl', 'x509', '-in', str(cert), '-noout', '-checkend', '0'], check=True, capture_output=True)
         cert_public = subprocess.run(['openssl', 'x509', '-in', str(cert), '-pubkey', '-noout'],
                                      check=True, capture_output=True).stdout
