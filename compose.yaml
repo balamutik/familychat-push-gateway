@@ -1,8 +1,6 @@
 services:
   gateway:
-    build:
-      context: ${PUSH_BUILD_CONTEXT:-.}
-      dockerfile: Dockerfile
+    image: ${PUSH_GATEWAY_IMAGE:?Run install.sh or set the digest from image.json}
     command: [serve, --state, /var/lib/familychat-push/state.json, --listen, ':9443', --tls-cert, '${PUSH_TLS_CERT:-/run/gateway-secrets/tls.crt}', --tls-key, '${PUSH_TLS_KEY:-/run/gateway-secrets/tls.key}']
     environment:
       APNS_KEY_FILE: ${APNS_KEY_FILE:-}

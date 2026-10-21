@@ -69,9 +69,20 @@ jobs:
           from pathlib import Path
           Path('dist/published-image.json').write_text(json.dumps({'image':os.environ['IMAGE'], 'revision':os.environ['REVISION']}, indent=2)+'\n')
           PY
+      - name: Verify anonymous registry access
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && github.repository == 'balamutik/familychat-push-gateway'
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}@${{ steps.image.outputs.digest }}
+        run: |
+          anonymous_config=$(mktemp -d)
+          trap 'rm -rf "$anonymous_config"' EXIT
+          DOCKER_CONFIG="$anonymous_config" docker manifest inspect "$IMAGE" > /dev/null
+          DOCKER_CONFIG="$anonymous_config" docker pull "$IMAGE"
       - name: Calculate checksums
         working-directory: dist
-        run: sha256sum *.tar.gz *.oci.tar > SHA256SUMS
+        run: |
+          sha256sum *.tar.gz *.oci.tar > SHA256SUMS
+          if [ -f published-image.json ]; then sha256sum published-image.json >> SHA256SUMS; fi
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: push-gateway-build-${{ github.sha }}

@@ -126,10 +126,12 @@ class InstallationTests(unittest.TestCase):
 
     def test_install_and_reinstall_preserve_state_and_use_managed_tls(self):
         calls = []
+        commands = []
         def certificate(cfg, renew=False):
             with mock.patch.object(manage.acme.os, 'chown'):
                 manage.acme.publish_pair(cfg, self.cert, self.key if self.key.exists() else self.install/'secrets/apns.p8')
         with mock.patch.object(manage.acme, 'ensure_docker'), mock.patch.object(manage.acme, 'ensure_acme'), \
+                mock.patch.object(manage.acme, 'command', side_effect=lambda args,**kwargs: commands.append(tuple(args))), \
                 mock.patch.object(manage.acme, 'ensure_port_available'), mock.patch.object(manage.acme.os, 'chown'), \
                 mock.patch.object(manage.acme, 'certificate', side_effect=certificate), \
                 mock.patch.object(manage, 'compose', side_effect=lambda root,*args: calls.append(args)), \
@@ -138,12 +140,22 @@ class InstallationTests(unittest.TestCase):
             state = self.install / 'data/state.json'
             state.write_text('{"clients":{"existing":"keep"},"devices":{"phone":"keep"}}')
             previous = state.read_bytes()
+            # Migrate a previous source-build installation while preserving provider settings.
+            env_path = self.install/'.env'
+            old_env = [line for line in env_path.read_text().splitlines() if not line.startswith('PUSH_GATEWAY_IMAGE=')]
+            env_path.write_text('PUSH_BUILD_CONTEXT=./app\n'+'\n'.join(old_env)+'\n')
             # Retry without needing the original external provider key file.
             self.key.unlink()
             args = manage.parser().parse_args(['install', '--install-dir', str(self.install), '--source', str(SOURCE)])
             manage.install(args)
             self.assertEqual(state.read_bytes(), previous)
         env = (self.install / '.env').read_text()
+        self.assertFalse(any('build' in call for call in calls), 'Installation must never compile an image on the VPS')
+        pulls = [call for call in commands if call[:2] == ('docker','pull')]
+        self.assertEqual(len(pulls),2)
+        self.assertRegex(pulls[0][2], r'^ghcr\.io/balamutik/familychat-push-gateway@sha256:[a-f0-9]{64}$')
+        self.assertIn('PUSH_GATEWAY_IMAGE='+pulls[0][2],env)
+        self.assertNotIn('PUSH_BUILD_CONTEXT',env)
         self.assertIn('PUSH_HTTPS_PORT=9443', env)
         self.assertIn('PUSH_TLS_CERT=/run/gateway-secrets/tls.pem', env)
         self.assertIn('PUSH_TLS_KEY=/run/gateway-secrets/tls.pem', env)
@@ -154,6 +166,7 @@ class InstallationTests(unittest.TestCase):
 
     def test_failed_certificate_can_be_retried_without_deleting_state(self):
         with mock.patch.object(manage.acme, 'ensure_docker'), mock.patch.object(manage.acme, 'ensure_acme'), \
+                mock.patch.object(manage.acme, 'command'), \
                 mock.patch.object(manage.acme, 'ensure_port_available'), mock.patch.object(manage.acme.os, 'chown'), \
                 mock.patch.object(manage.acme, 'certificate', side_effect=RuntimeError('CA unavailable')), \
                 mock.patch.object(manage, 'compose'), mock.patch.object(manage, 'install_timer'):
@@ -162,6 +175,59 @@ class InstallationTests(unittest.TestCase):
         self.assertTrue((self.install / 'pending.json').is_file())
         self.assertFalse((self.install / 'deploy.json').exists())
         self.assertTrue((self.install / 'secrets/apns.p8').is_file())
+        provider = (self.install/'secrets/apns.p8').read_bytes()
+        state = self.install/'data/state.json'
+        state.write_text('{"pending":"keep"}')
+        self.key.unlink()
+        env = self.install/'.env'
+        env.write_text('PUSH_BUILD_CONTEXT=./app\n'+'\n'.join(line for line in env.read_text().splitlines() if not line.startswith('PUSH_GATEWAY_IMAGE='))+'\n')
+        args = manage.parser().parse_args(['install','--install-dir',str(self.install),'--source',str(SOURCE)])
+        with mock.patch.object(manage.acme,'ensure_docker'), mock.patch.object(manage.acme,'ensure_acme'), \
+                mock.patch.object(manage.acme,'command'), mock.patch.object(manage.acme,'certificate'), \
+                mock.patch.object(manage,'compose'), mock.patch.object(manage,'health_check'), \
+                mock.patch.object(manage,'install_timer'):
+            manage.install(args)
+        self.assertEqual((self.install/'secrets/apns.p8').read_bytes(),provider)
+        self.assertEqual(state.read_text(),'{"pending":"keep"}')
+        self.assertFalse((self.install/'pending.json').exists())
+        self.assertEqual(json.loads((self.install/'deploy.json').read_text())['image'],manage.image_reference(SOURCE))
+        self.assertNotIn('PUSH_BUILD_CONTEXT',env.read_text())
+
+    def test_managed_compose_ignores_inherited_image_override(self):
+        with mock.patch.dict(os.environ, {'PUSH_GATEWAY_IMAGE':'busybox:latest'}), \
+                mock.patch.object(manage.acme, 'command') as command:
+            manage.compose(self.install, 'config', '--quiet')
+        self.assertNotIn('PUSH_GATEWAY_IMAGE', command.call_args.kwargs['env'])
+        self.assertEqual(command.call_args.kwargs['env']['PATH'], os.environ['PATH'])
+
+    def test_failed_image_pull_keeps_previous_configuration_and_data(self):
+        self.install.mkdir()
+        manage.acme.private_json(self.install/'deploy.json', config(self.install))
+        (self.install/'.env').write_text('PUSH_BUILD_CONTEXT=./app\nAPNS_TOPIC=com.example.chat\n')
+        (self.install/'compose.yaml').write_text('existing compose configuration\n')
+        (self.install/'data').mkdir()
+        (self.install/'data/state.json').write_text('{"preserve":"existing registrations"}')
+        previous = {name:(self.install/name).read_bytes() for name in ('.env','compose.yaml','data/state.json','deploy.json')}
+        args = manage.parser().parse_args(['update','--install-dir',str(self.install),'--source',str(SOURCE)])
+        with mock.patch.object(manage.acme,'ensure_docker'), mock.patch.object(manage.acme,'ensure_acme'), \
+                mock.patch.object(manage.acme,'command',side_effect=RuntimeError('registry unavailable')), \
+                mock.patch.object(manage.acme,'certificate'), mock.patch.object(manage,'compose'), \
+                mock.patch.object(manage,'health_check'), mock.patch.object(manage,'install_timer'):
+            with self.assertRaisesRegex(RuntimeError,'registry unavailable'):
+                manage.install(args)
+        for name,data in previous.items():
+            self.assertEqual((self.install/name).read_bytes(),data,name)
+
+    def test_only_official_digest_pinned_image_manifest_is_accepted(self):
+        self.assertTrue(hasattr(manage,'image_reference'),'Pinned image manifest loader is missing')
+        manifest = self.root/'image.json'
+        official = 'ghcr.io/balamutik/familychat-push-gateway@sha256:'+'a'*64
+        for image in ('ghcr.io/balamutik/familychat-push-gateway:latest', 'evil.example/image@sha256:'+'a'*64, official+'\nENV=bad'):
+            manifest.write_text(json.dumps({'image':image,'revision':'b'*40}))
+            with self.assertRaises(ValueError):
+                manage.image_reference(self.root)
+        manifest.write_text(json.dumps({'image':official,'revision':'b'*40}))
+        self.assertEqual(manage.image_reference(self.root),official)
 
     def test_new_provider_and_address_on_reinstall_are_not_silently_ignored(self):
         self.install.mkdir()

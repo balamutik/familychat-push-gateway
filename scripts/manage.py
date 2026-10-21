@@ -93,8 +93,30 @@ def configure_providers(values, root):
 
 
 def compose(root, *args):
+    # Compose gives the shell precedence over --env-file. The managed pin wins.
+    env = {name:value for name,value in os.environ.items() if name != 'PUSH_GATEWAY_IMAGE'}
     acme.command(['docker', 'compose', '--project-directory', root, '--env-file', root / '.env',
-                  '-f', root / 'compose.yaml', *args])
+                  '-f', root / 'compose.yaml', *args], env=env)
+
+
+def image_reference(source):
+    """The reviewed installer payload pins a published multi-platform image."""
+    path = Path(source)/'image.json'
+    if path.is_symlink() or not path.is_file():
+        raise ValueError('В установочном пакете отсутствует image.json; скачайте актуальный install.sh')
+    manifest = json.loads(path.read_text())
+    if not isinstance(manifest,dict) or not isinstance(manifest.get('revision'),str) or not re.fullmatch(r'[a-f0-9]{40}',manifest['revision']):
+        raise ValueError('Некорректная версия образа в image.json')
+    image = manifest.get('image','')
+    if not isinstance(image,str) or not re.fullmatch(r'ghcr\.io/balamutik/familychat-push-gateway@sha256:[a-f0-9]{64}',image):
+        raise ValueError('Образ должен быть закреплён по SHA-256 в официальном GHCR репозитории')
+    return image
+
+
+def update_image_env(root, image):
+    lines = (root/'.env').read_text().splitlines()
+    lines = [line for line in lines if not line.startswith(('PUSH_GATEWAY_IMAGE=','PUSH_BUILD_CONTEXT='))]
+    atomic_write(root/'.env', ('\n'.join(lines)+'\nPUSH_GATEWAY_IMAGE='+image+'\n').encode())
 
 
 def copy_source(source, root):
@@ -103,7 +125,7 @@ def copy_source(source, root):
     if source != target.resolve():
         staging = Path(tempfile.mkdtemp(prefix='.app-', dir=root))
         try:
-            for name in ('go.mod', 'Dockerfile', '.dockerignore', '.gitignore', 'compose.yaml', '.env.example', 'README.md', 'install.sh', 'cmd', 'internal', 'scripts'):
+            for name in ('go.mod', 'Dockerfile', '.dockerignore', '.gitignore', 'compose.yaml', '.env.example', 'README.md', 'install.sh', 'image.json', 'cmd', 'internal', 'scripts'):
                 path = source / name
                 if path.is_symlink() or (path.is_dir() and any(p.is_symlink() for p in path.rglob('*'))):
                     raise ValueError('Исходники установщика не должны содержать символические ссылки')
@@ -239,6 +261,7 @@ def install(args):
                     if index + 1 >= len(dns):
                         raise ValueError('После DNS credentials укажите путь к файлу')
                     acme.restricted_file(dns[index+1])
+    image = image_reference(source)
     acme.ensure_docker()
     dependencies = ['openssl','curl']
     if config['client'] == 'acme.sh' and config['challenge'] == 'standalone':
@@ -247,6 +270,9 @@ def install(args):
     if missing:
         acme.install_packages(missing)
     acme.ensure_acme(config)
+    # Pull the immutable artifact before changing an existing installation.
+    # No compiler, Docker build or registry credentials are needed on the VPS.
+    acme.command(['docker','pull',image])
     if not existing:
         acme.ensure_port_available(config['port'])
         if config['challenge'] == 'standalone':
@@ -257,14 +283,16 @@ def install(args):
         for name in ('data','export'):
             acme.protect_tree(root/name, 10001)
         persist_dns(config, root)
-        env = {'PUSH_BUILD_CONTEXT':'./app','PUSH_HTTPS_PORT':str(config['port']),
+        env = {'PUSH_GATEWAY_IMAGE':image,'PUSH_HTTPS_PORT':str(config['port']),
                'PUSH_TLS_CERT':'/run/gateway-secrets/tls.pem','PUSH_TLS_KEY':'/run/gateway-secrets/tls.pem', **settings}
         atomic_write(root/'.env', ''.join(f'{name}={value}\n' for name,value in env.items()).encode())
         config = {key:value for key,value in config.items() if key not in PROVIDER_OPTIONS and key not in ('source','command')}
         acme.private_json(root/'pending.json', config)
+    else:
+        update_image_env(root,image)
+    config['image'] = image
     copy_source(source, root)
     compose(root, 'config', '--quiet')
-    compose(root, 'build', 'gateway')
     acme.certificate(config, renew=existing == 'deploy.json')
     compose(root, 'up', '-d', '--no-build', '--wait', '--wait-timeout', '60', 'gateway')
     health_check(config)

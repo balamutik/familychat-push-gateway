@@ -9,4 +9,4 @@ for arch in amd64 arm64; do
     -o "$build_dir/familychat-push-gateway" ./cmd/familychat-push-gateway
   tar -czf "dist/familychat-push-gateway-linux-$arch.tar.gz" -C "$build_dir" familychat-push-gateway
 done
-tar --exclude='__pycache__' --exclude='*.pyc' -czf dist/familychat-push-gateway-deployment.tar.gz README.md compose.yaml .env.example .dockerignore .gitignore Dockerfile go.mod cmd internal install.sh scripts
+tar --exclude='__pycache__' --exclude='*.pyc' -czf dist/familychat-push-gateway-deployment.tar.gz README.md compose.yaml .env.example .dockerignore .gitignore Dockerfile go.mod cmd internal install.sh image.json scripts

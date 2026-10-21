@@ -40,7 +40,7 @@ sudo bash install.sh --domain push.example.com --email admin@example.com \
 
 Если порт 80 занят существующим веб-сервером, используйте `--challenge webroot --webroot /var/www/acme`. Каталог должен уже обслуживаться по `http://ADDRESS/.well-known/acme-challenge/`; маршрутизацию настраивает администратор существующего сервера. Для домена также поддерживается автоматический DNS-01: `--challenge dns --dns-provider dns_cf --dns-env /root/dns.env` с acme.sh. `dns.env` — приватный файл 0600 со строками `NAME=value`, без shell-команд. С Certbot передайте `--certbot-dns-args /root/dns-args.json`: приватный JSON-массив параметров установленного DNS-плагина, например `["--dns-cloudflare", "--dns-cloudflare-credentials", "/root/cloudflare.ini"]`; сам credentials-файл тоже должен иметь права 0600. DNS-01 не подтверждает IP-адрес.
 
-Установка по умолчанию находится в `/opt/familychat-push-gateway`, другой каталог задаётся `--install-dir`, порт — `--port` (по умолчанию 9443). Образ собирается из локальных исходников; готовый deployment-архив из Actions тоже содержит установщик и исходники. В каталоге установки отдельно сохраняются данные устройств, ключи провайдеров и ACME. Перед публикацией нового TLS bundle проверяются SAN, срок и совпадение приватного ключа. Обновление bundle атомарно; работающий шлюз читает его при новом TLS-соединении.
+Установка по умолчанию находится в `/opt/familychat-push-gateway`, другой каталог задаётся `--install-dir`, порт — `--port` (по умолчанию 9443). Установщик скачивает готовый публичный образ `ghcr.io/balamutik/familychat-push-gateway` для Linux amd64 или arm64. Версия закреплена SHA-256 digest в `image.json`; сборка на VPS и авторизация в GHCR не нужны. Если скачивание не удалось, установщик не меняет конфигурацию существующего шлюза. В каталоге установки отдельно сохраняются данные устройств, ключи провайдеров и ACME. Перед публикацией нового TLS bundle проверяются SAN, срок и совпадение приватного ключа. Обновление bundle атомарно; работающий шлюз читает его при новом TLS-соединении.
 
 Проверка и ручное продление:
 
@@ -85,7 +85,7 @@ sudo install -m 0400 -o 10001 -g 10001 /root/AuthKey.p8 secrets/apns.p8
 sudo install -m 0400 -o 10001 -g 10001 /root/firebase-service-account.json secrets/fcm.json
 sudo install -m 0400 -o 10001 -g 10001 /path/to/fullchain.pem secrets/tls.crt
 sudo install -m 0400 -o 10001 -g 10001 /path/to/privkey.pem secrets/tls.key
-sudo docker compose build gateway
+sudo docker compose pull gateway
 sudo docker compose up -d gateway
 ```
 
@@ -158,9 +158,9 @@ sudo docker compose run --rm gateway revoke-client \
 go test -race ./...
 go vet ./...
 python3 -m unittest discover -s scripts/tests -v
-docker compose build gateway
+docker build -t familychat-push-gateway:local .
 ```
 
-GitHub Actions запускается при push в `main`, pull request и вручную через **Actions → Build push gateway → Run workflow**. Сборка создаёт бинарники Linux amd64/arm64, Docker OCI-архив для обеих архитектур и файл SHA256SUMS; результаты доступны в артефакте `push-gateway-build-<commit>`. OCI-архив предназначен для инструментов с поддержкой OCI; для запуска через Docker Compose используйте сборку из исходников выше. Workflow не развёртывает сервис и не требует ключей APNs/FCM.
+GitHub Actions запускается при push в `main`, pull request и вручную через **Actions → Build push gateway → Run workflow**. Сборка создаёт бинарники Linux amd64/arm64, Docker OCI-архив для обеих архитектур и файл SHA256SUMS; результаты доступны в артефакте `push-gateway-build-<commit>`. В `main` workflow также публикует образ в GHCR с тегами SHA коммита и `latest`; `published-image.json` в артефакте содержит его неизменяемый digest. Установщик использует проверенный digest из репозиторного `image.json`, а не изменяемый тег `latest`. При выпуске новой версии runtime сопровождающий обновляет `image.json` и `.env.example` после успешной сборки, затем закрепляет коммит установочного пакета и SHA-256 его архива в standalone `install.sh`. Workflow не развёртывает сервис и не требует ключей APNs/FCM.
 
 API совместим с gateway-режимом сервера [FamilyChat](https://github.com/balamutik/familychat-server). В серверном релизе должны присутствовать `PUSH_GATEWAY_URL`, `PUSH_GATEWAY_TOKEN_FILE` и `compose.push-gateway.yaml`.
